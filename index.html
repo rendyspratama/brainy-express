@@ -2357,7 +2357,7 @@ const Bridge = (() => {
     bindBack();
     $('#bbTrain').innerHTML = trainSVG(); setTrain(6);
     render();
-    bindInput();
+    stopDrag(); bindInput();
     $('#bbDrive').onclick = drive;
     $('#gHint').onclick = () => { if (G.demo || G.phase !== 'build') return; Sound.pop(); G.hints++; hintFor(firstWrong(), false); };
     if (G.demo) demo();
@@ -2450,33 +2450,50 @@ const Bridge = (() => {
       const i = +b.dataset.p; G.sel = G.sel === i ? null : i; Sound.pop(); render();
       if (G.sel != null) Pip.say('gSay', `Now tap the hole for the ${SHAPES[G.pieces[i].shape].name}.`, false);
     });
-    let drag = null, ghost = null;
+    // Drag a piece. The floating copy ("ghost") is always cleaned up, even when a
+    // browser (notably Safari on iPhone/iPad) delivers the release outside the tray
+    // or never delivers it at all.
+    let drag = null;
     tray.addEventListener('pointerdown', e => {
       const b = e.target.closest('[data-p]'); if (!b || !G || G.demo || G.phase !== 'build') return;
-      drag = { i: +b.dataset.p, x: e.clientX, y: e.clientY, on: false };
+      if (e.button > 0) return;
+      clearGhosts();
+      drag = { i: +b.dataset.p, x: e.clientX, y: e.clientY, on: false, id: e.pointerId, g: G };
       try { b.setPointerCapture(e.pointerId); } catch (_) {}
     });
-    tray.addEventListener('pointermove', e => {
-      if (!drag) return;
+    const move = e => {
+      if (!drag || e.pointerId !== drag.id) return;
+      if (G !== drag.g || G.phase !== 'build') return cancel();
       if (!drag.on && Math.hypot(e.clientX - drag.x, e.clientY - drag.y) > 8) {
-        drag.on = true; ghost = document.createElement('div'); ghost.className = 'ghost';
-        ghost.innerHTML = pieceSVG(G.pieces[drag.i].shape); document.body.appendChild(ghost);
+        drag.on = true; clearGhosts();
+        const gh = document.createElement('div'); gh.className = 'ghost';
+        gh.innerHTML = pieceSVG(G.pieces[drag.i].shape); document.body.appendChild(gh);
       }
-      if (ghost) ghost.style.transform = `translate(${e.clientX - 32}px,${e.clientY - 32}px) scale(1.15)`;
-    });
-    const end = e => {
-      if (!drag) return;
-      if (drag.on) {
-        G.justDragged = true; setTimeout(() => { if (G) G.justDragged = false; }, 50);
-        if (ghost) ghost.remove(); ghost = null;
-        const el = document.elementFromPoint(e.clientX, e.clientY), g = el && el.closest ? el.closest('[data-slot]') : null;
-        if (g) place(drag.i, +g.dataset.slot); else Sound.soft();
-      }
-      drag = null;
+      const gh = $('.ghost');
+      if (gh) gh.style.transform = `translate(${e.clientX - 32}px,${e.clientY - 32}px) scale(1.15)`;
+      if (e.cancelable && drag.on) e.preventDefault();
     };
-    tray.addEventListener('pointerup', end);
-    tray.addEventListener('pointercancel', () => { drag = null; if (ghost) ghost.remove(); ghost = null; });
+    const end = e => {
+      if (!drag || e.pointerId !== drag.id) return;
+      const d = drag; drag = null; clearGhosts();
+      if (!d.on || G !== d.g || G.phase !== 'build') return;
+      G.justDragged = true; setTimeout(() => { if (G) G.justDragged = false; }, 60);
+      const el = document.elementFromPoint(e.clientX, e.clientY), g = el && el.closest ? el.closest('[data-slot]') : null;
+      if (g) place(d.i, +g.dataset.slot); else Sound.soft();
+    };
+    function cancel() { drag = null; clearGhosts(); }
+    // Listen on the whole window, not just the tray, so a release anywhere ends the drag
+    window.addEventListener('pointermove', move, { passive: false });
+    window.addEventListener('pointerup', end);
+    window.addEventListener('pointercancel', cancel);
+    window.addEventListener('blur', cancel);
+    document.addEventListener('visibilitychange', cancel);
+    stopDrag = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', end);
+      window.removeEventListener('pointercancel', cancel); window.removeEventListener('blur', cancel);
+      document.removeEventListener('visibilitychange', cancel); cancel(); };
   }
+  let stopDrag = () => {};
+  function clearGhosts() { document.querySelectorAll('.ghost').forEach(g => g.remove()); }
 
   /* ---------- Test drive ---------- */
   const firstWrong = () => G.slots.findIndex(s => s.piece == null || G.pieces[s.piece].shape !== s.shape);
@@ -2573,7 +2590,7 @@ const Bridge = (() => {
 
   /* ---------- Hub & results ---------- */
   function hub(speak = true) {
-    clearTimers(); G = null;
+    stopDrag(); clearTimers(); G = null;
     const s = STATIONS[SI], sst = st();
     if (!levelOpen(selLevel)) selLevel = 0;
     const lv = [0, 1, 2].map(k => {
@@ -2650,7 +2667,7 @@ const Bridge = (() => {
       const r = REFLECT[+b.dataset.i]; Pip.say('resSay', r[1]); $('#resQ').innerHTML = `<span class="chip">${r[0]} ✓</span>`;
     };
   }
-  return { hub, stop: () => { clearTimers(); G = null; } };
+  return { hub, stop: () => { clearTimers(); stopDrag(); G = null; } };
 })();
 STATION_GAMES.bridge = Bridge;
 
